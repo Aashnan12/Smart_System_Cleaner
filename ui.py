@@ -4,6 +4,7 @@ from cleanup import setup_cleanup_tab
 from storage import setup_storage_tab
 from memory import setup_memory_tab
 from deep_clean import setup_deep_clean_tab
+from recycle_bin import setup_recycle_bin_tab
 
 def create_ui(root):
     root.title("Smart System Cleaner")
@@ -40,6 +41,10 @@ def create_ui(root):
     deep_clean_frame = ttk.Frame(notebook)
     notebook.add(deep_clean_frame, text='Deep Clean')
     setup_deep_clean_tab(deep_clean_frame)
+
+    recycle_bin_frame = ttk.Frame(notebook)
+    notebook.add(recycle_bin_frame, text='Recycle Bin')
+    setup_recycle_bin_tab(recycle_bin_frame)
 
     # Subtle shadow effect
     shadow = tk.Frame(root, bg="#D0D0D0", height=2)
