@@ -69,7 +69,7 @@ def setup_cleanup_tab(frame):
     browse_button = ttk.Button(dup_frame, text="Browse", command=lambda: browse_dup_dir(dup_dir_entry))
     browse_button.grid(row=0, column=2, padx=10, pady=5)
     
-    # Tree view for duplicate files
+    # Tree view for duplicate files with multiple selection enabled
     dup_tree = ttk.Treeview(dup_frame, columns=('Size', 'Hash', 'Status'), selectmode='extended', height=10)
     dup_tree.grid(row=1, column=0, columnspan=3, sticky='nsew', padx=10, pady=5)
     dup_tree.heading('#0', text='File Path')
@@ -79,6 +79,11 @@ def setup_cleanup_tab(frame):
     dup_tree.column('Size', width=100)
     dup_tree.column('Hash', width=200)
     dup_tree.column('Status', width=100)
+
+    # Add scrollbar for the treeview
+    scrollbar = ttk.Scrollbar(dup_frame, orient="vertical", command=dup_tree.yview)
+    scrollbar.grid(row=1, column=3, sticky='ns')
+    dup_tree.configure(yscrollcommand=scrollbar.set)
 
     # Buttons frame
     btn_frame = ttk.Frame(dup_frame)
@@ -96,6 +101,10 @@ def setup_cleanup_tab(frame):
     delete_dup_button = ttk.Button(btn_frame, text="Delete Selected", 
                                   command=lambda: delete_selected_files(dup_tree))
     delete_dup_button.pack(side='left', padx=5)
+    
+    delete_same_content_button = ttk.Button(btn_frame, text="Delete Same Content", 
+                                          command=lambda: delete_same_content_files(dup_tree))
+    delete_same_content_button.pack(side='left', padx=5)
     
     keep_unique_button = ttk.Button(btn_frame, text="Keep Unique", 
                                    command=lambda: keep_unique_files(dup_tree))
@@ -265,6 +274,49 @@ def delete_selected_files(dup_tree):
 
     if messagebox.askyesno("Confirm", "Delete selected files? This action cannot be undone."):
         for item in selected:
+            file_path = dup_tree.item(item, 'text')
+            if os.path.exists(file_path):
+                try:
+                    send2trash.send2trash(file_path)
+                    dup_tree.delete(item)
+                except PermissionError:
+                    messagebox.showerror("Permission Denied", 
+                        f"Cannot delete {file_path}\nPlease check file permissions.")
+                except Exception as e:
+                    messagebox.showerror("Error", 
+                        f"Failed to delete {file_path}: {str(e)}")
+
+def delete_same_content_files(dup_tree):
+    selected = dup_tree.selection()
+    if not selected:
+        messagebox.showwarning("Warning", "Please select a file first")
+        return
+
+    # Get the hash of the selected file
+    selected_hash = None
+    for item in selected:
+        values = dup_tree.item(item, 'values')
+        if values[1] and values[1] != 'N/A':
+            selected_hash = values[1]
+            break
+
+    if not selected_hash:
+        messagebox.showwarning("Warning", "Please select a valid file with calculated hash")
+        return
+
+    # Find all files with the same hash
+    files_to_delete = []
+    for item in dup_tree.get_children():
+        for child in dup_tree.get_children(item):
+            if dup_tree.item(child, 'values')[1] == selected_hash:
+                files_to_delete.append(child)
+
+    if len(files_to_delete) <= 1:
+        messagebox.showinfo("Info", "No duplicate content found for the selected file")
+        return
+
+    if messagebox.askyesno("Confirm", f"Delete all {len(files_to_delete)} files with the same content? This action cannot be undone."):
+        for item in files_to_delete:
             file_path = dup_tree.item(item, 'text')
             if os.path.exists(file_path):
                 try:
