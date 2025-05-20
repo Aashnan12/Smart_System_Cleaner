@@ -277,7 +277,9 @@ def delete_selected_files(dup_tree):
             file_path = dup_tree.item(item, 'text')
             if os.path.exists(file_path):
                 try:
-                    send2trash.send2trash(file_path)
+                    # Normalize the path to handle special characters
+                    normalized_path = os.path.normpath(file_path)
+                    send2trash.send2trash(normalized_path)
                     dup_tree.delete(item)
                 except PermissionError:
                     messagebox.showerror("Permission Denied", 
@@ -320,7 +322,9 @@ def delete_same_content_files(dup_tree):
             file_path = dup_tree.item(item, 'text')
             if os.path.exists(file_path):
                 try:
-                    send2trash.send2trash(file_path)
+                    # Normalize the path to handle special characters
+                    normalized_path = os.path.normpath(file_path)
+                    send2trash.send2trash(normalized_path)
                     dup_tree.delete(item)
                 except PermissionError:
                     messagebox.showerror("Permission Denied", 
@@ -356,7 +360,9 @@ def keep_unique_files(dup_tree):
                 # Keep the first file, delete the rest
                 for item_id, file_path in hash_group[1:]:
                     try:
-                        send2trash.send2trash(file_path)
+                        # Normalize the path to handle special characters
+                        normalized_path = os.path.normpath(file_path)
+                        send2trash.send2trash(normalized_path)
                         dup_tree.delete(item_id)
                     except PermissionError:
                         messagebox.showerror("Permission Denied", 
