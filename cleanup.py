@@ -102,13 +102,19 @@ def setup_cleanup_tab(frame):
                                   command=lambda: delete_selected_files(dup_tree))
     delete_dup_button.pack(side='left', padx=5)
     
-    delete_same_content_button = ttk.Button(btn_frame, text="Delete Same Content", 
-                                          command=lambda: delete_same_content_files(dup_tree))
-    delete_same_content_button.pack(side='left', padx=5)
-    
-    keep_unique_button = ttk.Button(btn_frame, text="Keep Unique", 
-                                   command=lambda: keep_unique_files(dup_tree))
-    keep_unique_button.pack(side='left', padx=5)
+    select_all_button = ttk.Button(btn_frame, text="Select All", 
+                                  command=lambda: select_all_files(dup_tree))
+    select_all_button.pack(side='left', padx=5)
+
+    # Bind Ctrl+A for select all
+    dup_tree.bind('<Control-a>', lambda e: select_all_files(dup_tree))
+
+def select_all_files(tree):
+    """Select all files in the tree view."""
+    tree.selection_set(tree.get_children())
+    for parent in tree.get_children():
+        for child in tree.get_children(parent):
+            tree.selection_add(child)
 
 def scan_temp_files(temp_size_label, scan_button):
     scan_button.config(state='disabled')
@@ -287,86 +293,3 @@ def delete_selected_files(dup_tree):
                 except Exception as e:
                     messagebox.showerror("Error", 
                         f"Failed to delete {file_path}: {str(e)}")
-
-def delete_same_content_files(dup_tree):
-    selected = dup_tree.selection()
-    if not selected:
-        messagebox.showwarning("Warning", "Please select a file first")
-        return
-
-    # Get the hash of the selected file
-    selected_hash = None
-    for item in selected:
-        values = dup_tree.item(item, 'values')
-        if values[1] and values[1] != 'N/A':
-            selected_hash = values[1]
-            break
-
-    if not selected_hash:
-        messagebox.showwarning("Warning", "Please select a valid file with calculated hash")
-        return
-
-    # Find all files with the same hash
-    files_to_delete = []
-    for item in dup_tree.get_children():
-        for child in dup_tree.get_children(item):
-            if dup_tree.item(child, 'values')[1] == selected_hash:
-                files_to_delete.append(child)
-
-    if len(files_to_delete) <= 1:
-        messagebox.showinfo("Info", "No duplicate content found for the selected file")
-        return
-
-    if messagebox.askyesno("Confirm", f"Delete all {len(files_to_delete)} files with the same content? This action cannot be undone."):
-        for item in files_to_delete:
-            file_path = dup_tree.item(item, 'text')
-            if os.path.exists(file_path):
-                try:
-                    # Normalize the path to handle special characters
-                    normalized_path = os.path.normpath(file_path)
-                    send2trash.send2trash(normalized_path)
-                    dup_tree.delete(item)
-                except PermissionError:
-                    messagebox.showerror("Permission Denied", 
-                        f"Cannot delete {file_path}\nPlease check file permissions.")
-                except Exception as e:
-                    messagebox.showerror("Error", 
-                        f"Failed to delete {file_path}: {str(e)}")
-
-def keep_unique_files(dup_tree):
-    hash_groups = defaultdict(list)
-    permission_denied = []
-    
-    for item in dup_tree.get_children():
-        for child in dup_tree.get_children(item):
-            file_path = dup_tree.item(child, 'text')
-            status = dup_tree.item(child, 'values')[2]
-            if status == 'Permission Denied':
-                permission_denied.append(file_path)
-                continue
-            file_hash = dup_tree.item(child, 'values')[1]
-            hash_groups[file_hash].append((child, file_path))
-
-    if permission_denied:
-        messagebox.showwarning("Permission Denied",
-            "Some files cannot be processed due to insufficient permissions:\n" +
-            "\n".join(permission_denied[:5]) +
-            ("\n..." if len(permission_denied) > 5 else ""))
-        return
-
-    if messagebox.askyesno("Confirm", "Keep only one file from each duplicate group?"):
-        for hash_group in hash_groups.values():
-            if len(hash_group) > 1:
-                # Keep the first file, delete the rest
-                for item_id, file_path in hash_group[1:]:
-                    try:
-                        # Normalize the path to handle special characters
-                        normalized_path = os.path.normpath(file_path)
-                        send2trash.send2trash(normalized_path)
-                        dup_tree.delete(item_id)
-                    except PermissionError:
-                        messagebox.showerror("Permission Denied", 
-                            f"Cannot delete {file_path}\nPlease check file permissions.")
-                    except Exception as e:
-                        messagebox.showerror("Error", 
-                            f"Failed to delete {file_path}: {str(e)}")
