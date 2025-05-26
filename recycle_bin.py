@@ -54,11 +54,13 @@ class RecycleBin:
                     original_structure = []
                     for root, dirs, files in os.walk(file_path):
                         rel_path = os.path.relpath(root, file_path)
-                        original_structure.append({
-                            'path': rel_path,
-                            'dirs': dirs,
-                            'files': files
-                        })
+                        for f in files:
+                            file_full_path = os.path.join(root, f)
+                            rel_file_path = os.path.relpath(file_full_path, file_path)
+                            original_structure.append({
+                                'path': rel_file_path,
+                                'size': os.path.getsize(file_full_path)
+                            })
 
                 shutil.move(file_path, bin_path)
                 metadata[bin_name] = {
@@ -83,21 +85,54 @@ class RecycleBin:
                 total_size += os.path.getsize(fp)
         return total_size
 
-    def restore_file(self, bin_name, custom_path=None):
+    def restore_file(self, bin_name, file_path=None, custom_path=None):
         metadata = self._load_metadata()
         if bin_name not in metadata:
             raise ValueError(f"File not found in recycle bin: {bin_name}")
 
         bin_path = os.path.join(self.bin_dir, bin_name)
         original_path = metadata[bin_name]['original_path']
-        restore_path = custom_path if custom_path else original_path
-        restore_dir = os.path.dirname(restore_path)
 
-        if not os.path.exists(restore_dir):
-            os.makedirs(restore_dir)
+        # Handle individual file restoration from a folder
+        if metadata[bin_name]['is_directory'] and file_path:
+            bin_file_path = os.path.join(bin_path, file_path)
+            if not os.path.exists(bin_file_path):
+                raise ValueError(f"File not found in folder: {file_path}")
 
-        shutil.move(bin_path, restore_path)
-        del metadata[bin_name]
+            restore_path = custom_path if custom_path else os.path.join(
+                os.path.dirname(original_path),
+                file_path
+            )
+            restore_dir = os.path.dirname(restore_path)
+
+            if not os.path.exists(restore_dir):
+                os.makedirs(restore_dir)
+
+            shutil.copy2(bin_file_path, restore_path)
+            os.remove(bin_file_path)
+
+            # Update the metadata to remove the restored file
+            metadata[bin_name]['original_structure'] = [
+                item for item in metadata[bin_name]['original_structure']
+                if item['path'] != file_path
+            ]
+            metadata[bin_name]['size'] = self._get_dir_size(bin_path)
+
+            # If the folder is empty after restoration, remove it
+            if not os.listdir(bin_path):
+                os.rmdir(bin_path)
+                del metadata[bin_name]
+        else:
+            # Regular file or full folder restoration
+            restore_path = custom_path if custom_path else original_path
+            restore_dir = os.path.dirname(restore_path)
+
+            if not os.path.exists(restore_dir):
+                os.makedirs(restore_dir)
+
+            shutil.move(bin_path, restore_path)
+            del metadata[bin_name]
+
         self._save_metadata(metadata)
 
     def permanently_delete(self, bin_names):
@@ -183,16 +218,15 @@ def setup_recycle_bin_tab(frame):
                 item_type
             ), tags=(bin_name,))
 
-            # If it's a directory and has structure info, add child items
+            # If it's a directory, add child items for each file
             if is_dir and info.get('original_structure'):
-                for struct in info['original_structure']:
-                    if struct['path'] != '.':
-                        tree.insert(parent, 'end', values=(
-                            os.path.join(info['original_path'], struct['path']),
-                            '',
-                            '',
-                            'Subfolder'
-                        ))
+                for file_info in info['original_structure']:
+                    tree.insert(parent, 'end', values=(
+                        file_info['path'],
+                        '',
+                        format_size(file_info['size']),
+                        'File'
+                    ), tags=(f"{bin_name}:{file_info['path']}",))
 
     def restore_selected():
         selection = tree.selection()
@@ -200,23 +234,33 @@ def setup_recycle_bin_tab(frame):
             messagebox.showwarning("Warning", "Please select items to restore")
             return
 
-        custom_path = None
-        if len(selection) == 1:
-            if messagebox.askyesno("Restore Location", "Would you like to choose a custom restore location?"):
-                if tree.item(selection[0])['values'][3] == 'Folder':
-                    custom_path = filedialog.askdirectory(title="Choose Restore Location")
-                else:
-                    custom_path = filedialog.asksaveasfilename(
-                        title="Choose Restore Location",
-                        initialfile=os.path.basename(tree.item(selection[0])['values'][0])
-                    )
-
         restored = []
         failed = []
         for item in selection:
             try:
-                bin_name = tree.item(item)['tags'][0]
-                bin_instance.restore_file(bin_name, custom_path)
+                tags = tree.item(item)['tags'][0]
+                if ':' in tags:  # Individual file from a folder
+                    bin_name, file_path = tags.split(':', 1)
+                    custom_path = None
+                    if messagebox.askyesno("Restore Location", 
+                                         "Would you like to choose a custom restore location?"):
+                        custom_path = filedialog.asksaveasfilename(
+                            title="Choose Restore Location",
+                            initialfile=os.path.basename(file_path)
+                        )
+                    bin_instance.restore_file(bin_name, file_path, custom_path)
+                else:  # Regular file or folder
+                    custom_path = None
+                    if messagebox.askyesno("Restore Location", 
+                                         "Would you like to choose a custom restore location?"):
+                        if tree.item(item)['values'][3] == 'Folder':
+                            custom_path = filedialog.askdirectory(title="Choose Restore Location")
+                        else:
+                            custom_path = filedialog.asksaveasfilename(
+                                title="Choose Restore Location",
+                                initialfile=os.path.basename(tree.item(item)['values'][0])
+                            )
+                    bin_instance.restore_file(tags, custom_path=custom_path)
                 restored.append(tree.item(item)['values'][0])
             except Exception as e:
                 failed.append((tree.item(item)['values'][0], str(e)))
@@ -234,12 +278,22 @@ def setup_recycle_bin_tab(frame):
             messagebox.showwarning("Warning", "Please select items to delete")
             return
         
-        items_to_delete = [tree.item(item)['values'][0] for item in selection]
+        items_to_delete = []
+        for item in selection:
+            tags = tree.item(item)['tags'][0]
+            if ':' not in tags:  # Only allow deleting whole folders/files
+                items_to_delete.append(tree.item(item)['values'][0])
+        
+        if not items_to_delete:
+            messagebox.showwarning("Warning", "Please select entire folders or files to delete")
+            return
+        
         if messagebox.askyesno("Confirm Deletion", 
                               "Permanently delete the following items?\n\n" + 
                               "\n".join(items_to_delete)):
             try:
-                bin_names = [tree.item(item)['tags'][0] for item in selection]
+                bin_names = [tree.item(item)['tags'][0] for item in selection 
+                           if ':' not in tree.item(item)['tags'][0]]
                 deleted, failed = bin_instance.permanently_delete(bin_names)
                 
                 if deleted:
