@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.venv/
+venv/
+.smart_cleaner_bin/
