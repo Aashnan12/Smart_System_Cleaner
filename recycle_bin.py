@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import os
 import shutil
 import json
@@ -29,49 +29,103 @@ class RecycleBin:
         with open(self.metadata_file, 'w') as f:
             json.dump(metadata, f)
 
-    def move_to_bin(self, file_path):
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+    def move_to_bin(self, file_paths):
+        if not isinstance(file_paths, list):
+            file_paths = [file_paths]
 
+        moved_files = []
+        failed_files = []
         metadata = self._load_metadata()
-        file_name = os.path.basename(file_path)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        bin_name = f"{timestamp}_{file_name}"
-        bin_path = os.path.join(self.bin_dir, bin_name)
 
-        shutil.move(file_path, bin_path)
-        metadata[bin_name] = {
-            'original_path': file_path,
-            'deleted_date': datetime.now().isoformat(),
-            'size': os.path.getsize(bin_path)
-        }
+        for file_path in file_paths:
+            try:
+                if not os.path.exists(file_path):
+                    failed_files.append((file_path, "File not found"))
+                    continue
+
+                file_name = os.path.basename(file_path)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                bin_name = f"{timestamp}_{file_name}"
+                bin_path = os.path.join(self.bin_dir, bin_name)
+
+                # Store original structure for folders
+                original_structure = None
+                if os.path.isdir(file_path):
+                    original_structure = []
+                    for root, dirs, files in os.walk(file_path):
+                        rel_path = os.path.relpath(root, file_path)
+                        original_structure.append({
+                            'path': rel_path,
+                            'dirs': dirs,
+                            'files': files
+                        })
+
+                shutil.move(file_path, bin_path)
+                metadata[bin_name] = {
+                    'original_path': file_path,
+                    'deleted_date': datetime.now().isoformat(),
+                    'size': os.path.getsize(bin_path) if os.path.isfile(bin_path) else self._get_dir_size(bin_path),
+                    'is_directory': os.path.isdir(bin_path),
+                    'original_structure': original_structure
+                }
+                moved_files.append(file_path)
+            except Exception as e:
+                failed_files.append((file_path, str(e)))
+
         self._save_metadata(metadata)
+        return moved_files, failed_files
 
-    def restore_file(self, bin_name):
+    def _get_dir_size(self, path):
+        total_size = 0
+        for dirpath, _, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total_size += os.path.getsize(fp)
+        return total_size
+
+    def restore_file(self, bin_name, custom_path=None):
         metadata = self._load_metadata()
         if bin_name not in metadata:
             raise ValueError(f"File not found in recycle bin: {bin_name}")
 
         bin_path = os.path.join(self.bin_dir, bin_name)
         original_path = metadata[bin_name]['original_path']
-        original_dir = os.path.dirname(original_path)
+        restore_path = custom_path if custom_path else original_path
+        restore_dir = os.path.dirname(restore_path)
 
-        if not os.path.exists(original_dir):
-            os.makedirs(original_dir)
+        if not os.path.exists(restore_dir):
+            os.makedirs(restore_dir)
 
-        shutil.move(bin_path, original_path)
+        shutil.move(bin_path, restore_path)
         del metadata[bin_name]
         self._save_metadata(metadata)
 
-    def permanently_delete(self, bin_name):
+    def permanently_delete(self, bin_names):
+        if not isinstance(bin_names, list):
+            bin_names = [bin_names]
+
         metadata = self._load_metadata()
-        if bin_name not in metadata:
-            raise ValueError(f"File not found in recycle bin: {bin_name}")
+        deleted = []
+        failed = []
 
-        bin_path = os.path.join(self.bin_dir, bin_name)
-        os.remove(bin_path)
-        del metadata[bin_name]
+        for bin_name in bin_names:
+            try:
+                if bin_name not in metadata:
+                    failed.append((bin_name, "File not found in recycle bin"))
+                    continue
+
+                bin_path = os.path.join(self.bin_dir, bin_name)
+                if os.path.isdir(bin_path):
+                    shutil.rmtree(bin_path)
+                else:
+                    os.remove(bin_path)
+                del metadata[bin_name]
+                deleted.append(bin_name)
+            except Exception as e:
+                failed.append((bin_name, str(e)))
+
         self._save_metadata(metadata)
+        return deleted, failed
 
     def get_bin_contents(self):
         return self._load_metadata()
@@ -79,18 +133,39 @@ class RecycleBin:
 def setup_recycle_bin_tab(frame):
     bin_instance = RecycleBin()
 
-    # Create Treeview
-    tree = ttk.Treeview(frame, columns=('Original Path', 'Date', 'Size'), show='headings', height=15)
+    # Create Treeview with checkboxes
+    tree = ttk.Treeview(frame, columns=('Original Path', 'Date', 'Size', 'Type'), 
+                       show='tree headings', height=15)
     tree.heading('Original Path', text='Original Path')
     tree.heading('Date', text='Deletion Date')
-    tree.heading('Size', text='Size (KB)')
+    tree.heading('Size', text='Size')
+    tree.heading('Type', text='Type')
     tree.column('Date', width=150)
     tree.column('Size', width=100)
-    tree.pack(fill='both', expand=True, padx=10, pady=10)
+    tree.column('Type', width=100)
+
+    # Add scrollbars
+    vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+    # Grid layout for tree and scrollbars
+    tree.grid(row=0, column=0, sticky='nsew')
+    vsb.grid(row=0, column=1, sticky='ns')
+    hsb.grid(row=1, column=0, sticky='ew')
+    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_rowconfigure(0, weight=1)
 
     # Buttons frame
     btn_frame = ttk.Frame(frame)
-    btn_frame.pack(fill='x', padx=10, pady=5)
+    btn_frame.grid(row=2, column=0, columnspan=2, pady=5)
+
+    def format_size(size_bytes):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.2f} TB"
 
     def refresh_list():
         for item in tree.get_children():
@@ -98,44 +173,96 @@ def setup_recycle_bin_tab(frame):
         
         contents = bin_instance.get_bin_contents()
         for bin_name, info in contents.items():
-            size_kb = info['size'] / 1024
-            tree.insert('', 'end', values=(
+            is_dir = info.get('is_directory', False)
+            item_type = 'Folder' if is_dir else 'File'
+            
+            parent = tree.insert('', 'end', values=(
                 info['original_path'],
                 datetime.fromisoformat(info['deleted_date']).strftime("%Y-%m-%d %H:%M:%S"),
-                f"{size_kb:.2f}"
+                format_size(info['size']),
+                item_type
             ), tags=(bin_name,))
+
+            # If it's a directory and has structure info, add child items
+            if is_dir and info.get('original_structure'):
+                for struct in info['original_structure']:
+                    if struct['path'] != '.':
+                        tree.insert(parent, 'end', values=(
+                            os.path.join(info['original_path'], struct['path']),
+                            '',
+                            '',
+                            'Subfolder'
+                        ))
 
     def restore_selected():
         selection = tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "Please select a file to restore")
+            messagebox.showwarning("Warning", "Please select items to restore")
             return
-        
-        try:
-            bin_name = tree.item(selection[0], 'tags')[0]
-            bin_instance.restore_file(bin_name)
-            messagebox.showinfo("Success", "File restored successfully")
-            refresh_list()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to restore file: {str(e)}")
+
+        custom_path = None
+        if len(selection) == 1:
+            if messagebox.askyesno("Restore Location", "Would you like to choose a custom restore location?"):
+                if tree.item(selection[0])['values'][3] == 'Folder':
+                    custom_path = filedialog.askdirectory(title="Choose Restore Location")
+                else:
+                    custom_path = filedialog.asksaveasfilename(
+                        title="Choose Restore Location",
+                        initialfile=os.path.basename(tree.item(selection[0])['values'][0])
+                    )
+
+        restored = []
+        failed = []
+        for item in selection:
+            try:
+                bin_name = tree.item(item)['tags'][0]
+                bin_instance.restore_file(bin_name, custom_path)
+                restored.append(tree.item(item)['values'][0])
+            except Exception as e:
+                failed.append((tree.item(item)['values'][0], str(e)))
+
+        if restored:
+            messagebox.showinfo("Success", f"Successfully restored {len(restored)} items")
+        if failed:
+            messagebox.showerror("Error", "Failed to restore some items:\n" + 
+                               "\n".join(f"{path}: {error}" for path, error in failed))
+        refresh_list()
 
     def delete_selected():
         selection = tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "Please select a file to delete")
+            messagebox.showwarning("Warning", "Please select items to delete")
             return
         
-        if messagebox.askyesno("Confirm", "Permanently delete selected file?"):
+        items_to_delete = [tree.item(item)['values'][0] for item in selection]
+        if messagebox.askyesno("Confirm Deletion", 
+                              "Permanently delete the following items?\n\n" + 
+                              "\n".join(items_to_delete)):
             try:
-                bin_name = tree.item(selection[0], 'tags')[0]
-                bin_instance.permanently_delete(bin_name)
-                messagebox.showinfo("Success", "File deleted permanently")
+                bin_names = [tree.item(item)['tags'][0] for item in selection]
+                deleted, failed = bin_instance.permanently_delete(bin_names)
+                
+                if deleted:
+                    messagebox.showinfo("Success", f"Successfully deleted {len(deleted)} items")
+                if failed:
+                    messagebox.showerror("Error", "Failed to delete some items:\n" + 
+                                       "\n".join(f"{name}: {error}" for name, error in failed))
                 refresh_list()
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to delete file: {str(e)}")
+                messagebox.showerror("Error", f"Failed to delete items: {str(e)}")
 
     ttk.Button(btn_frame, text="Refresh", command=refresh_list).pack(side='left', padx=5)
     ttk.Button(btn_frame, text="Restore Selected", command=restore_selected).pack(side='left', padx=5)
     ttk.Button(btn_frame, text="Delete Permanently", command=delete_selected).pack(side='left', padx=5)
 
+    # Initialize the view
     refresh_list()
+
+    # Enable multiple selection
+    tree.configure(selectmode='extended')
+
+    # Bind Ctrl+A for select all
+    def select_all(event):
+        for item in tree.get_children():
+            tree.selection_add(item)
+    tree.bind('<Control-a>', select_all)
